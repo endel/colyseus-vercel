@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Colyseus on Vercel — demo</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #0b0e14; color: #d6deeb; }
+    header { padding: 12px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; border-bottom: 1px solid #1c2333; }
+    h1 { font-size: 14px; margin: 0; font-weight: 600; }
+    input, button { font: inherit; background: #11151f; color: #d6deeb; border: 1px solid #2a3447; border-radius: 6px; padding: 6px 10px; }
+    button { cursor: pointer; }
+    button:hover { border-color: #5a7fff; }
+    #status { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid #2a3447; }
+    .ok { color: #9ece6a; border-color: #2e4a1f !important; }
+    .err { color: #f7768e; border-color: #5a2030 !important; }
+    main { display: flex; gap: 12px; padding: 12px 16px; flex-wrap: wrap; }
+    canvas { background: #070a10; border: 1px solid #1c2333; border-radius: 8px; cursor: crosshair; touch-action: none; }
+    aside { width: 320px; display: flex; flex-direction: column; gap: 8px; }
+    #log { flex: 1; min-height: 200px; background: #070a10; border: 1px solid #1c2333; border-radius: 8px; padding: 8px; font-size: 12px; overflow-y: auto; white-space: pre-wrap; }
+    .hint { font-size: 12px; opacity: 0.6; }
+    .row { display: flex; gap: 6px; }
+    .row input { flex: 1; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>⚔️ Colyseus × Vercel</h1>
+    <input id="endpoint" size="34" />
+    <input id="name" placeholder="your name" size="12" />
+    <button id="connect">connect</button>
+    <span id="status" class="err">disconnected</span>
+  </header>
+
+  <main>
+    <canvas id="board" width="800" height="600"></canvas>
+    <aside>
+      <div class="hint">click the board or use arrow keys to move. you'll see other tabs/players in realtime.</div>
+      <div class="row">
+        <input id="chat" placeholder="say something…" />
+        <button id="send">send</button>
+      </div>
+      <div id="log"></div>
+    </aside>
+  </main>
+
+  <script type="module">
+    import { Client, getStateCallbacks } from "https://esm.sh/@colyseus/sdk@0.17.43";
+
+    const $ = (id) => document.getElementById(id);
+    const canvas = $("board");
+    const ctx = canvas.getContext("2d");
+
+    // wss://host on Vercel; ws://localhost:2567 when opened from a file/local dev
+    const defaultEndpoint =
+      location.protocol.startsWith("http") && location.hostname !== "localhost"
+        ? location.origin.replace(/^http/, "ws")
+        : "ws://localhost:2567";
+    $("endpoint").value = defaultEndpoint;
+    $("name").value = "player-" + Math.floor(Math.random() * 1000);
+
+    const players = new Map(); // sessionId -> {name,x,y,color}
+    let room = null;
+    let mySessionId = null;
+
+    function log(msg) {
+      const el = $("log");
+      el.textContent += msg + "\n";
+      el.scrollTop = el.scrollHeight;
+    }
+    function setStatus(text, ok) {
+      const el = $("status");
+      el.textContent = text;
+      el.className = ok ? "ok" : "err";
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      for (const [sid, p] of players) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, sid === mySessionId ? 12 : 9, 0, Math.PI * 2);
+        ctx.fillStyle = p.color || "#5a7fff";
+        ctx.fill();
+        if (sid === mySessionId) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke(); }
+        ctx.fillStyle = "#d6deeb";
+        ctx.font = "12px ui-monospace, monospace";
+        ctx.fillText(p.name + (sid === mySessionId ? " (you)" : ""), p.x + 14, p.y + 4);
+      }
+    }
+
+    async function connect() {
+      try {
+        setStatus("connecting…", false);
+        const client = new Client($("endpoint").value);
+        room = await client.joinOrCreate("my_room", { name: $("name").value });
+        mySessionId = room.sessionId;
+        setStatus("connected · " + room.roomId, true);
+        log("joined room " + room.roomId + " as " + room.sessionId);
+
+        const cb = getStateCallbacks(room);
+        cb(room.state).players.onAdd((player, sessionId) => {
+          const p = { name: player.name, x: player.x, y: player.y, color: player.color };
+          players.set(sessionId, p);
+          cb(player).onChange(() => { p.name = player.name; p.x = player.x; p.y = player.y; p.color = player.color; render(); });
+          log("+ " + player.name + " joined");
+          render();
+        });
+        cb(room.state).players.onRemove((_player, sessionId) => {
+          players.delete(sessionId);
+          log("- " + sessionId + " left");
+          render();
+        });
+
+        room.onMessage("chat", ({ name, text }) => log(name + ": " + text));
+        room.onLeave((code) => { setStatus("disconnected (" + code + ")", false); log("left room, code=" + code); });
+        room.onError((code, message) => log("room error " + code + ": " + message));
+      } catch (e) {
+        setStatus("failed", false);
+        log("connect error: " + (e?.message || e));
+        console.error(e);
+      }
+    }
+
+    function move(x, y) {
+      x = Math.max(0, Math.min(canvas.width, x));
+      y = Math.max(0, Math.min(canvas.height, y));
+      const me = players.get(mySessionId);
+      if (me) { me.x = x; me.y = y; render(); } // optimistic
+      room?.send("move", { x, y });
+    }
+
+    canvas.addEventListener("pointerdown", (e) => {
+      const r = canvas.getBoundingClientRect();
+      move(e.clientX - r.left, e.clientY - r.top);
+    });
+    window.addEventListener("keydown", (e) => {
+      const me = players.get(mySessionId);
+      if (!me || !["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
+      e.preventDefault();
+      const step = 20;
+      move(me.x + (e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0),
+           me.y + (e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0));
+    });
+
+    $("connect").addEventListener("click", connect);
+    $("send").addEventListener("click", sendChat);
+    $("chat").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
+    function sendChat() {
+      const text = $("chat").value.trim();
+      if (text && room) { room.send("chat", text); $("chat").value = ""; }
+    }
+
+    render();
+  </script>
+</body>
+</html>
