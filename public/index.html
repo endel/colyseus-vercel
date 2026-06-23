@@ -39,7 +39,7 @@
   <main>
     <canvas id="board" width="800" height="600"></canvas>
     <aside>
-      <div class="hint">auto-connects on load. click the board or use arrow keys to move — entities glide to their target. open a second tab to see realtime sync. the Colyseus debug panel sits bottom-right.</div>
+      <div class="hint">auto-connects on load. click the board or use arrow keys to move — entities glide to their target. open a second tab to see realtime sync. drops auto-reconnect (dropped players dim with a ⟳ until they return). debug panel sits bottom-right.</div>
       <div class="row">
         <input id="chat" placeholder="say something…" />
         <button id="send">send</button>
@@ -95,6 +95,7 @@
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       for (const [sid, p] of players) {
         const me = sid === mySessionId;
+        ctx.globalAlpha = p.connected === false ? 0.3 : 1; // dim players awaiting reconnection
         ctx.beginPath();
         ctx.arc(p.x, p.y, me ? 12 : 9, 0, Math.PI * 2);
         ctx.fillStyle = p.color || "#5a7fff";
@@ -102,7 +103,8 @@
         if (me) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke(); }
         ctx.fillStyle = "#d6deeb";
         ctx.font = "12px ui-monospace, monospace";
-        ctx.fillText(p.name + (me ? " (you)" : ""), p.x + 14, p.y + 4);
+        ctx.fillText(p.name + (me ? " (you)" : "") + (p.connected === false ? " ⟳" : ""), p.x + 14, p.y + 4);
+        ctx.globalAlpha = 1;
       }
     }
     let last = performance.now();
@@ -143,10 +145,10 @@
 
         const $$ = getStateCallbacks(room);
         $$(room.state).players.onAdd((player, sessionId) => {
-          const p = { name: player.name, color: player.color, x: player.x, y: player.y, tx: player.x, ty: player.y };
+          const p = { name: player.name, color: player.color, connected: player.connected, x: player.x, y: player.y, tx: player.x, ty: player.y };
           players.set(sessionId, p);
           $$(player).onChange(() => {
-            p.name = player.name; p.color = player.color;
+            p.name = player.name; p.color = player.color; p.connected = player.connected;
             p.tx = player.x; p.ty = player.y; // update target — frame loop interpolates
           });
           log("+ " + player.name + " joined");
@@ -158,6 +160,20 @@
 
         room.onMessage("chat", ({ name, text }) => log(name + ": " + text));
         room.onError((code, message) => log("room error " + code + ": " + message));
+
+        // connection dropped unexpectedly — the SDK auto-reconnects (exp backoff)
+        room.onDrop((code) => {
+          setStatus("reconnecting…", "pending");
+          setToggle("cancel", false);
+          log("⚠ connection dropped (" + code + ") — reconnecting…");
+        });
+        room.onReconnect(() => {
+          mySessionId = room.sessionId;
+          setStatus("connected · " + room.roomId, "ok");
+          setToggle("disconnect", false);
+          log("✅ reconnected");
+        });
+
         room.onLeave((code) => {
           const wasIntentional = intentionalLeave;
           room = null; mySessionId = null; connecting = false;
