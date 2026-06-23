@@ -8,13 +8,18 @@
     "start": "tsx src/server.ts"
   },
   "dependencies": {
+    "@colyseus/core": "file:.vendor/colyseus-core-0.17.43.tgz",
     "@colyseus/schema": "^4.0.26",
-    "colyseus": "^0.17.10"
+    "@colyseus/ws-transport": "file:.vendor/colyseus-ws-transport-0.17.13.tgz",
+    "express": "^4.21.2"
   },
   "devDependencies": {
     "@colyseus/sdk": "^0.17.43",
+    "@types/express": "^5.0.6",
     "@types/node": "^22.20.0",
+    "@types/ws": "^8.18.1",
     "tsx": "^4.22.4",
     "typescript": "^5.9.3"
-  }
+  },
+  "main": "src/server.ts"
 }

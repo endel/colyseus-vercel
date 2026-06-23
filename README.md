@@ -1,26 +1,87 @@
 # Colyseus on Vercel
 
-A minimal [Colyseus](https://colyseus.io) **0.17** multiplayer app running on
+A minimal [Colyseus](https://colyseus.io) **0.17** app running on
 [Vercel's WebSocket support](https://vercel.com/changelog/websocket-support-is-now-in-public-beta)
-(public beta). Move a dot, chat, and watch state sync in realtime across tabs.
+(public beta) — **realtime multiplayer + Express HTTP routes on one server**.
+Move a dot, chat, sync state across tabs, and hit plain HTTP endpoints.
 
-- **Server:** `colyseus@0.17` + `@colyseus/ws-transport`
-- **Client:** `@colyseus/sdk@0.17` (loaded from a CDN in `public/index.html`)
+- **Server:** `colyseus@0.17` + `@colyseus/ws-transport` + `express`
+- **Client:** `@colyseus/sdk@0.17` (from a CDN in `public/index.html`)
 - **Host:** Vercel Functions on Fluid compute
 
 👉 Live: https://vercel-psi-ten-36.vercel.app
 
+> **Note:** this demo vendors a pre-release Colyseus build (`.vendor/*.tgz`) that
+> adds `Server.serverless()` — see [Why `serverless()`](#why-serverless). Once
+> that lands in a published release, replace the `file:` deps in `package.json`
+> with the normal `colyseus` package.
+
 ## How it works on Vercel
 
-Vercel turns a Node.js HTTP server into a Function when the entrypoint is named
-`server.ts` (root or `src/`) and calls `listen()` during module startup. It then
-routes HTTP requests **and** WebSocket upgrades to that server through an
-internal port (the port you pass to `listen()` only matters locally).
+Vercel exposes two ways to run a Node HTTP server, and they behave differently:
 
-There's one catch that makes a stock `gameServer.listen()` fail (see caveat #1),
-so `src/server.ts` listens synchronously itself and lets Colyseus bind its routes
-afterward. WebSockets need no extra config; the only `vercel.json` entries are a
-`maxDuration` bump and a redirect for the landing page.
+| pattern | what Vercel drives | WebSockets | Express routes |
+| --- | --- | --- | --- |
+| `server.listen()` ("captured server") | the server's request listeners | ✅ | ❌ (Express app handler not invoked) |
+| `export default server` | the server's full request handling | ✅ | ✅ |
+
+Colyseus normally calls `gameServer.listen()`, which lands on the **captured
+server** path — great for realtime, but Vercel doesn't invoke Express there. To
+get realtime **and** Express, this demo uses the **`export default server`**
+path via a new `Server.serverless()`:
+
+```ts
+// src/server.ts
+import { createServer } from "node:http";
+import { Server } from "@colyseus/core";
+import { WebSocketTransport } from "@colyseus/ws-transport";
+import { MyRoom } from "./rooms/MyRoom";
+
+const httpServer = createServer();
+
+const gameServer = new Server({
+  transport: new WebSocketTransport({ server: httpServer }),
+  express: (app) => {
+    app.get("/hello", (_req, res) => res.json({ hello: true }));
+    app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
+  },
+});
+gameServer.define("my_room", MyRoom);
+
+// set up matchmaking + routes WITHOUT binding a port; export for Vercel
+const server = await gameServer.serverless();
+
+// local dev only — serverless() doesn't listen (Vercel drives the export)
+if (!process.env.VERCEL) server.listen(Number(process.env.PORT) || 2567);
+
+export default server;
+```
+
+Two more requirements for the `export default` path on Vercel:
+
+- **`package.json` `"main": "src/server.ts"`** — Vercel's auto-detection doesn't
+  recognize a default-exported server wired through library code, so point it at
+  the entrypoint explicitly.
+- **Create the `http.Server` in your file** (`createServer()`) and pass it to the
+  transport, so the default export is a server Vercel can consume.
+
+`vercel.json` only adds a `maxDuration` bump and a `/` → `/index.html` redirect
+for the landing page.
+
+### Realtime-only alternative (no Express)
+
+If you don't need Express, the simplest setup is the captured-server path — just
+`gameServer.listen(port)` (no `serverless()`, no `export default`, no
+`package.json main`). Colyseus 0.17's `listen()` was adjusted to call the
+underlying `server.listen()` synchronously so Vercel captures it.
+
+## Why `serverless()`
+
+`Server.serverless()` (added to `@colyseus/core`) does what `listen()` does —
+`matchMaker.accept()` + bind the matchmaking/HTTP routes — but **without binding
+a port**, and returns the underlying `http.Server`. It also pre-reads request
+bodies into `req.body` so matchmaking `POST`s work under the `export default`
+path (Vercel doesn't drain the router's lazy request stream there).
 
 ## Local dev
 
@@ -28,11 +89,10 @@ afterward. WebSockets need no extra config; the only `vercel.json` entries are a
 npm install
 npm run dev          # Colyseus on http://localhost:2567
 
-# serve the client and open it
-npx serve public     # then visit the printed URL (connects to ws://localhost:2567)
+npx serve public     # serve the client; it connects to ws://localhost:2567
 ```
 
-Headless smoke test (joins a room, exercises state sync + chat):
+Headless smoke test (join a room, exercise state sync + chat):
 
 ```bash
 node test-client.mjs                                        # local
@@ -47,31 +107,19 @@ npx vercel deploy --prod
 
 ## Caveats (Vercel + Colyseus 0.17, all verified)
 
-1. **Vercel only captures the server if `listen()` is called _synchronously_ at
-   module startup.** Colyseus calls `server.listen()` _asynchronously_ — after
-   `await matchMaker.accept()` — so Vercel never captures it and every request
-   504s. Worse, Colyseus uses the 4-arg `listen(port, host, backlog, cb)` form,
-   which Vercel doesn't fire the callback for either. `src/server.ts` works around
-   both: it `listen()`s the transport's server synchronously, and patches
-   `http.Server.prototype.listen` so Colyseus's later call doesn't re-listen but
-   still runs its callback (where the matchmaking routes get bound). Once routing
-   is wired, matchmaking (`POST /matchmake`, with body) and the WS upgrade work
-   normally.
-
-2. **Single-instance only.** A room lives in one function instance's memory, and
+1. **Single-instance only.** A room lives in one function instance's memory, and
    after matchmaking the client's WebSocket must reach the instance that owns the
    room (`matchMaker.getLocalRoomById`). Vercel can't sticky-route a WS to a
    specific instance by room, so this holds only while traffic stays on one warm
    Fluid instance. Demo-grade; real horizontal scale needs routing Vercel doesn't
    expose.
 
-3. **WebSocket connections close at the function's `maxDuration`** (set to 300s in
+2. **WebSocket connections close at the function's `maxDuration`** (300s in
    `vercel.json`). Clients should reconnect on close and reload state.
 
-4. **The landing page is served via a redirect.** Colyseus owns `/` (it returns a
-   version string), so `vercel.json` redirects `/` → `/index.html` (a static
-   file). A `rewrite` doesn't work here because the captured Node server claims
-   `/` before the rewrite resolves.
+3. **The landing page is served via a redirect.** `vercel.json` redirects `/` →
+   `/index.html` (a static file) so the bare domain serves the client page rather
+   than Colyseus's root response.
 
-5. **Per-deployment `*.vercel.app` URLs return 401** (Deployment Protection). Use
+4. **Per-deployment `*.vercel.app` URLs return 401** (Deployment Protection). Use
    the production alias to test, or disable protection in project settings.

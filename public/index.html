@@ -99,6 +99,13 @@
         setStatus("connected · " + room.roomId, true);
         log("joined room " + room.roomId + " as " + room.sessionId);
 
+        // show that plain Express HTTP routes work on the same server
+        try {
+          const httpBase = $("endpoint").value.replace(/^ws/, "http");
+          const health = await (await fetch(httpBase + "/api/health")).json();
+          log("HTTP GET /api/health → " + JSON.stringify(health));
+        } catch { /* ignore */ }
+
         const cb = getStateCallbacks(room);
         cb(room.state).players.onAdd((player, sessionId) => {
           const p = { name: player.name, x: player.x, y: player.y, color: player.color };
