@@ -13,10 +13,8 @@ Move a dot, chat, sync state across tabs, and hit plain HTTP endpoints.
 
 👉 Live: https://colyseus-vercel.vercel.app
 
-> **Note:** this demo vendors a pre-release Colyseus build (`.vendor/*.tgz`) that
-> adds `Server.serverless()` — see [Why `serverless()`](#why-serverless). Once
-> that lands in a published release, replace the `file:` deps in `package.json`
-> with the normal `colyseus` package.
+> **Note:** requires `@colyseus/core@^0.17.44`, which adds `Server.serverless()`
+> (see [Why `serverless()`](#why-serverless)).
 
 ## How it works on Vercel
 
