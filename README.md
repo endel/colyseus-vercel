@@ -1,6 +1,8 @@
 # Colyseus on Vercel
 
-A minimal [Colyseus](https://colyseus.io) **0.17** app running on
+![](image.png)
+
+This is a minimal [Colyseus](https://colyseus.io) **0.17** app running on
 [Vercel's WebSocket support](https://vercel.com/changelog/websocket-support-is-now-in-public-beta)
 (public beta) — **realtime multiplayer + Express HTTP routes on one server**.
 Move a dot, chat, sync state across tabs, and hit plain HTTP endpoints.
@@ -68,12 +70,12 @@ Two more requirements for the `export default` path on Vercel:
 `vercel.json` only adds a `maxDuration` bump and a `/` → `/index.html` redirect
 for the landing page.
 
-### Realtime-only alternative (no Express)
+### Realtime-only (no Express)
 
-If you don't need Express, the simplest setup is the captured-server path — just
-`gameServer.listen(port)` (no `serverless()`, no `export default`, no
-`package.json main`). Colyseus 0.17's `listen()` was adjusted to call the
-underlying `server.listen()` synchronously so Vercel captures it.
+If you don't need Express routes, still use `serverless()` — just omit the
+`express` option. On Vercel a bare `gameServer.listen(port)` is **not** captured
+(Vercel drives a default-exported server, not a listening one), so
+`serverless()` + `export default` is the path either way.
 
 ## Why `serverless()`
 
