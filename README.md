@@ -11,7 +11,7 @@ Move a dot, chat, sync state across tabs, and hit plain HTTP endpoints.
 - **Client:** `@colyseus/sdk@0.17` (from a CDN in `public/index.html`)
 - **Host:** Vercel Functions on Fluid compute
 
-👉 Live: https://vercel-psi-ten-36.vercel.app
+👉 Live: https://colyseus-vercel.vercel.app
 
 > **Note:** this demo vendors a pre-release Colyseus build (`.vendor/*.tgz`) that
 > adds `Server.serverless()` — see [Why `serverless()`](#why-serverless). Once
@@ -103,9 +103,13 @@ ENDPOINT="wss://your-app.vercel.app" node test-client.mjs   # deployed
 
 ## Deploy
 
+Connected to Vercel via Git — push to deploy:
+
 ```bash
-npx vercel deploy --prod
+git push        # Vercel builds & deploys the production branch
 ```
+
+(Or `npx vercel deploy --prod` for a manual one-off deploy.)
 
 ## Caveats (Vercel + Colyseus 0.17, all verified)
 
