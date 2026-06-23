@@ -39,7 +39,7 @@
   <main>
     <canvas id="board" width="800" height="600"></canvas>
     <aside>
-      <div class="hint">auto-connects on load. click the board or use arrow keys to move — entities glide to their target. open a second tab to see realtime sync. drops auto-reconnect (dropped players dim with a ⟳ until they return). debug panel sits bottom-right.</div>
+      <div class="hint">auto-connects on load. click the board to move — entities glide to their target. open a second tab to see realtime sync. drops auto-reconnect (dropped players dim with a ⟳ until they return). debug panel sits bottom-right.</div>
       <div class="row">
         <input id="chat" placeholder="say something…" />
         <button id="send">send</button>
@@ -213,14 +213,6 @@
     canvas.addEventListener("pointerdown", (e) => {
       const r = canvas.getBoundingClientRect();
       move(e.clientX - r.left, e.clientY - r.top);
-    });
-    window.addEventListener("keydown", (e) => {
-      const me = players.get(mySessionId);
-      if (!me || !["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
-      e.preventDefault();
-      const step = 20;
-      move(me.tx + (e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0),
-           me.ty + (e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0));
     });
 
     function sendChat() {

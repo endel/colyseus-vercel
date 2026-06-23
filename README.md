@@ -101,16 +101,6 @@ node test-client.mjs                                        # local
 ENDPOINT="wss://your-app.vercel.app" node test-client.mjs   # deployed
 ```
 
-## Deploy
-
-Connected to Vercel via Git — push to deploy:
-
-```bash
-git push        # Vercel builds & deploys the production branch
-```
-
-(Or `npx vercel deploy --prod` for a manual one-off deploy.)
-
 ## Caveats (Vercel + Colyseus 0.17, all verified)
 
 1. **Single-instance only.** A room lives in one function instance's memory, and
