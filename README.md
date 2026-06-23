@@ -110,8 +110,11 @@ ENDPOINT="wss://your-app.vercel.app" node test-client.mjs   # deployed
    Fluid instance. Demo-grade; real horizontal scale needs routing Vercel doesn't
    expose.
 
-2. **WebSocket connections close at the function's `maxDuration`** (300s in
-   `vercel.json`). Clients should reconnect on close and reload state.
+2. **WebSocket connections close at the function's `maxDuration`** — per Vercel's
+   docs: *"WebSocket connections close when a Vercel Function reaches its maximum
+   duration."* Set to `300s` here (Hobby's default/max; Pro/Enterprise allow up
+   to 800s, 1800s extended). The client auto-reconnects via `onDrop`/`onReconnect`
+   when this happens.
 
 3. **The landing page is served via a redirect.** `vercel.json` redirects `/` →
    `/index.html` (a static file) so the bare domain serves the client page rather
