@@ -10,7 +10,7 @@
   "dependencies": {
     "@colyseus/core": "file:.vendor/colyseus-core-0.17.44.tgz",
     "@colyseus/schema": "^4.0.26",
-    "@colyseus/ws-transport": "file:.vendor/colyseus-ws-transport-0.17.13.tgz",
+    "@colyseus/ws-transport": "^0.17.13",
     "express": "^4.21.2"
   },
   "devDependencies": {

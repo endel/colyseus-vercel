@@ -12,10 +12,12 @@
     h1 { font-size: 14px; margin: 0; font-weight: 600; }
     input, button { font: inherit; background: #11151f; color: #d6deeb; border: 1px solid #2a3447; border-radius: 6px; padding: 6px 10px; }
     button { cursor: pointer; }
-    button:hover { border-color: #5a7fff; }
+    button:hover:not(:disabled) { border-color: #5a7fff; }
+    button:disabled { opacity: 0.5; cursor: default; }
     #status { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid #2a3447; }
     .ok { color: #9ece6a; border-color: #2e4a1f !important; }
     .err { color: #f7768e; border-color: #5a2030 !important; }
+    .pending { color: #e0af68; border-color: #5a4a1f !important; }
     main { display: flex; gap: 12px; padding: 12px 16px; flex-wrap: wrap; }
     canvas { background: #070a10; border: 1px solid #1c2333; border-radius: 8px; cursor: crosshair; touch-action: none; }
     aside { width: 320px; display: flex; flex-direction: column; gap: 8px; }
@@ -30,14 +32,14 @@
     <h1>⚔️ Colyseus × Vercel</h1>
     <input id="endpoint" size="34" />
     <input id="name" placeholder="your name" size="12" />
-    <button id="connect">connect</button>
+    <button id="toggle">connect</button>
     <span id="status" class="err">disconnected</span>
   </header>
 
   <main>
     <canvas id="board" width="800" height="600"></canvas>
     <aside>
-      <div class="hint">click the board or use arrow keys to move. you'll see other tabs/players in realtime.</div>
+      <div class="hint">auto-connects on load. click the board or use arrow keys to move — entities glide to their target. open a second tab to see realtime sync. the Colyseus debug panel sits bottom-right.</div>
       <div class="row">
         <input id="chat" placeholder="say something…" />
         <button id="send">send</button>
@@ -47,7 +49,11 @@
   </main>
 
   <script type="module">
-    import { Client, getStateCallbacks } from "https://esm.sh/@colyseus/sdk@0.17.43";
+    // ?bundle=false so the SDK and the debug panel share the same internal
+    // Client module — the panel patches Client.prototype to auto-track rooms,
+    // which only works if both resolve to the same module instance.
+    import { Client, getStateCallbacks } from "https://esm.sh/@colyseus/sdk@0.17.43?bundle=false";
+    import "https://esm.sh/@colyseus/sdk@0.17.43/debug?bundle=false"; // floating realtime room inspector
 
     const $ = (id) => document.getElementById(id);
     const canvas = $("board");
@@ -61,81 +67,131 @@
     $("endpoint").value = defaultEndpoint;
     $("name").value = "player-" + Math.floor(Math.random() * 1000);
 
-    const players = new Map(); // sessionId -> {name,x,y,color}
+    // sessionId -> { name, color, x, y, tx, ty }  (x/y rendered, tx/ty target from server)
+    const players = new Map();
     let room = null;
     let mySessionId = null;
+    let connecting = false;
+    let intentionalLeave = false;
 
     function log(msg) {
       const el = $("log");
       el.textContent += msg + "\n";
       el.scrollTop = el.scrollHeight;
     }
-    function setStatus(text, ok) {
+    function setStatus(text, cls) {
       const el = $("status");
       el.textContent = text;
-      el.className = ok ? "ok" : "err";
+      el.className = cls;
+    }
+    function setToggle(label, disabled) {
+      const btn = $("toggle");
+      btn.textContent = label;
+      btn.disabled = !!disabled;
     }
 
-    function render() {
+    // ---- render loop: interpolate every entity toward its target every frame ----
+    function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       for (const [sid, p] of players) {
+        const me = sid === mySessionId;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, sid === mySessionId ? 12 : 9, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, me ? 12 : 9, 0, Math.PI * 2);
         ctx.fillStyle = p.color || "#5a7fff";
         ctx.fill();
-        if (sid === mySessionId) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke(); }
+        if (me) { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.stroke(); }
         ctx.fillStyle = "#d6deeb";
         ctx.font = "12px ui-monospace, monospace";
-        ctx.fillText(p.name + (sid === mySessionId ? " (you)" : ""), p.x + 14, p.y + 4);
+        ctx.fillText(p.name + (me ? " (you)" : ""), p.x + 14, p.y + 4);
       }
     }
+    let last = performance.now();
+    function frame(now) {
+      const dt = Math.min((now - last) / 1000, 0.1);
+      last = now;
+      const a = 1 - Math.exp(-dt * 10); // framerate-independent smoothing
+      for (const p of players.values()) {
+        p.x += (p.tx - p.x) * a;
+        p.y += (p.ty - p.y) * a;
+      }
+      draw();
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
 
+    // ---- connection lifecycle ----
     async function connect() {
+      if (connecting || room) return;
+      connecting = true;
+      intentionalLeave = false;
+      setStatus("connecting…", "pending");
+      setToggle("connecting…", true);
       try {
-        setStatus("connecting…", false);
         const client = new Client($("endpoint").value);
         room = await client.joinOrCreate("my_room", { name: $("name").value });
         mySessionId = room.sessionId;
-        setStatus("connected · " + room.roomId, true);
+        setStatus("connected · " + room.roomId, "ok");
+        setToggle("disconnect", false);
         log("joined room " + room.roomId + " as " + room.sessionId);
 
-        // show that plain Express HTTP routes work on the same server
+        // demonstrate plain Express HTTP routes on the same server
         try {
           const httpBase = $("endpoint").value.replace(/^ws/, "http");
           const health = await (await fetch(httpBase + "/api/health")).json();
           log("HTTP GET /api/health → " + JSON.stringify(health));
         } catch { /* ignore */ }
 
-        const cb = getStateCallbacks(room);
-        cb(room.state).players.onAdd((player, sessionId) => {
-          const p = { name: player.name, x: player.x, y: player.y, color: player.color };
+        const $$ = getStateCallbacks(room);
+        $$(room.state).players.onAdd((player, sessionId) => {
+          const p = { name: player.name, color: player.color, x: player.x, y: player.y, tx: player.x, ty: player.y };
           players.set(sessionId, p);
-          cb(player).onChange(() => { p.name = player.name; p.x = player.x; p.y = player.y; p.color = player.color; render(); });
+          $$(player).onChange(() => {
+            p.name = player.name; p.color = player.color;
+            p.tx = player.x; p.ty = player.y; // update target — frame loop interpolates
+          });
           log("+ " + player.name + " joined");
-          render();
         });
-        cb(room.state).players.onRemove((_player, sessionId) => {
+        $$(room.state).players.onRemove((_player, sessionId) => {
           players.delete(sessionId);
           log("- " + sessionId + " left");
-          render();
         });
 
         room.onMessage("chat", ({ name, text }) => log(name + ": " + text));
-        room.onLeave((code) => { setStatus("disconnected (" + code + ")", false); log("left room, code=" + code); });
         room.onError((code, message) => log("room error " + code + ": " + message));
+        room.onLeave((code) => {
+          const wasIntentional = intentionalLeave;
+          room = null; mySessionId = null; connecting = false;
+          players.clear();
+          setStatus(wasIntentional ? "disconnected" : "disconnected (" + code + ")", "err");
+          setToggle("connect", false);
+          log("left room" + (wasIntentional ? "" : ", code=" + code));
+        });
       } catch (e) {
-        setStatus("failed", false);
+        room = null; connecting = false;
+        setStatus("failed", "err");
+        setToggle("connect", false);
         log("connect error: " + (e?.message || e));
         console.error(e);
+        return;
       }
+      connecting = false;
     }
 
+    function disconnect() {
+      if (!room) return;
+      intentionalLeave = true;
+      setToggle("disconnecting…", true);
+      room.leave(); // triggers room.onLeave → resets UI
+    }
+
+    // ---- movement (sets target; frame loop interpolates) ----
     function move(x, y) {
+      if (!room) return;
       x = Math.max(0, Math.min(canvas.width, x));
       y = Math.max(0, Math.min(canvas.height, y));
       const me = players.get(mySessionId);
-      if (me) { me.x = x; me.y = y; render(); } // optimistic
-      room?.send("move", { x, y });
+      if (me) { me.tx = x; me.ty = y; } // optimistic target; server confirms via onChange
+      room.send("move", { x, y });
     }
 
     canvas.addEventListener("pointerdown", (e) => {
@@ -147,19 +203,19 @@
       if (!me || !["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) return;
       e.preventDefault();
       const step = 20;
-      move(me.x + (e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0),
-           me.y + (e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0));
+      move(me.tx + (e.key === "ArrowRight" ? step : e.key === "ArrowLeft" ? -step : 0),
+           me.ty + (e.key === "ArrowDown" ? step : e.key === "ArrowUp" ? -step : 0));
     });
 
-    $("connect").addEventListener("click", connect);
-    $("send").addEventListener("click", sendChat);
-    $("chat").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
     function sendChat() {
       const text = $("chat").value.trim();
       if (text && room) { room.send("chat", text); $("chat").value = ""; }
     }
+    $("toggle").addEventListener("click", () => (room ? disconnect() : connect()));
+    $("send").addEventListener("click", sendChat);
+    $("chat").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
 
-    render();
+    connect(); // auto-connect on page load
   </script>
 </body>
 </html>
